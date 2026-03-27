@@ -6,12 +6,13 @@ import {
 import { Reference } from "./parser.js";
 import { colour } from "@enc-tiles/s52";
 import { LineStyles } from "./SHOWLINE.js";
-import { listIncludes, quaposLowQuality } from "../filters.js";
+import { listContains, listIncludes, quaposLowQuality } from "../filters.js";
 import type { LayerConfig } from "../symbolology/index.js";
 
 const procs = {
   DEPARE03,
   DEPCNT03,
+  LIGHTS06,
   OBSTRN07,
   RESARE04,
   RESTRN01,
@@ -84,8 +85,342 @@ export function DEPCNT03(config: LayerConfig): Partial<LayerSpecification>[] {
 }
 
 /** TODO: DEPVAL02 - 13.2.3 Depth value */
-/** TODO: LIGHTS06 - 13.2.4 Light flares, light sectors & light coverage */
-/** TODO: LITDSN02 - 10.6.3 Light description text string */
+/**
+ * LIGHTS06 - 13.2.4 Light flares, light sectors & light coverage
+ * (S-52 PresLib 4.0, section 13.2.4)
+ *
+ * Applies to S-57 object class LIGHTS (point only).
+ * Attributes: COLOUR (list), CATLIT (list), SECTR1, SECTR2, ORIENT,
+ *             VALNMR, LITCHR, LITVIS, SIGGRP, SIGPER, HEIGHT, STATUS
+ *
+ * This is the most complex CSP. This implementation covers:
+ *   - Floodlights/spotlights (CATLIT 8,11) → LIGHTS82
+ *   - Strip lights (CATLIT 9) → LIGHTS81
+ *   - Directional lights (CATLIT 1,16) with ORIENT → oriented flare
+ *   - Non-sector lights → flare symbol by COLOUR (LIGHTS11/12/13)
+ *   - Light description text (LITDSN02): CATLIT prefix + LITCHR + SIGGRP +
+ *     COLOUR + SIGPER + HEIGHT + VALNMR + STATUS suffix
+ *
+ * TODO: Sector light arcs and leg lines (requires rendering arcs, which
+ *       MapLibre doesn't support natively — may need pipeline pre-computation)
+ * TODO: Major light circles (VALNMR >= 10)
+ * TODO: Co-located light detection for flare angle offset
+ */
+export function LIGHTS06(config: LayerConfig): Partial<LayerSpecification>[] {
+  // Colour → flare symbol mapping (S-52 spec table)
+  // COLOUR is a list attribute stored as a JSON string
+  const flareSymbol: ExpressionSpecification = [
+    "case",
+    // Red or white+red → LIGHTS11 (red flare)
+    ["any", listIncludes("COLOUR", "3"), listIncludes("COLOUR", "3")],
+    "LIGHTS11",
+    // Green or white+green → LIGHTS12 (green flare)
+    listIncludes("COLOUR", "4"),
+    "LIGHTS12",
+    // Yellow, orange, white, blue+yellow → LIGHTS13 (yellow flare)
+    [
+      "any",
+      listIncludes("COLOUR", "6"),
+      listIncludes("COLOUR", "11"),
+      listIncludes("COLOUR", "1"),
+    ],
+    "LIGHTS13",
+    // Default → LITDEF11
+    "LITDEF11",
+  ];
+
+  return [
+    // --- Special light types (checked first, exit early per spec) ---
+
+    // Floodlight (CATLIT 8) or spotlight (CATLIT 11)
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["has", "CATLIT"],
+        ["any", listIncludes("CATLIT", "8"), listIncludes("CATLIT", "11")],
+      ] as ExpressionFilterSpecification,
+      layout: { "icon-image": "LIGHTS82", "icon-allow-overlap": true },
+    },
+
+    // Strip light (CATLIT 9)
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["has", "CATLIT"],
+        listIncludes("CATLIT", "9"),
+        ["!", listIncludes("CATLIT", "8")],
+        ["!", listIncludes("CATLIT", "11")],
+      ] as ExpressionFilterSpecification,
+      layout: { "icon-image": "LIGHTS81", "icon-allow-overlap": true },
+    },
+
+    // --- Directional lights (CATLIT 1 or 16) with ORIENT ---
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["has", "CATLIT"],
+        ["any", listIncludes("CATLIT", "1"), listIncludes("CATLIT", "16")],
+        ["has", "ORIENT"],
+        // Exclude flood/spot/strip
+        ["!", listIncludes("CATLIT", "8")],
+        ["!", listIncludes("CATLIT", "9")],
+        ["!", listIncludes("CATLIT", "11")],
+      ] as ExpressionFilterSpecification,
+      layout: {
+        "icon-image": flareSymbol,
+        // ORIENT is from seaward, rotate flare to show direction of light
+        "icon-rotate": ["+", ["get", "ORIENT"], 180],
+        "icon-allow-overlap": true,
+      },
+    },
+
+    // --- Non-sector, non-special lights → flare symbol ---
+    // Sector lights (SECTR1 and SECTR2 present and different) are excluded
+    // since we don't render arcs yet
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        // Exclude special types handled above
+        [
+          "any",
+          ["!", ["has", "CATLIT"]],
+          [
+            "all",
+            ["!", listIncludes("CATLIT", "8")],
+            ["!", listIncludes("CATLIT", "9")],
+            ["!", listIncludes("CATLIT", "11")],
+            ["!", listIncludes("CATLIT", "1")],
+            ["!", listIncludes("CATLIT", "16")],
+          ],
+        ],
+        // Exclude sector lights (have both SECTR1 and SECTR2)
+        ["any", ["!", ["has", "SECTR1"]], ["!", ["has", "SECTR2"]]],
+      ] as ExpressionFilterSpecification,
+      layout: {
+        "icon-image": flareSymbol,
+        "icon-allow-overlap": true,
+      },
+    },
+
+    // --- Sector lights: just show flare for now ---
+    // TODO: render sector arcs and leg lines
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["has", "SECTR1"],
+        ["has", "SECTR2"],
+        // Exclude special types
+        [
+          "any",
+          ["!", ["has", "CATLIT"]],
+          [
+            "all",
+            ["!", listIncludes("CATLIT", "8")],
+            ["!", listIncludes("CATLIT", "9")],
+            ["!", listIncludes("CATLIT", "11")],
+            ["!", listIncludes("CATLIT", "1")],
+            ["!", listIncludes("CATLIT", "16")],
+          ],
+        ],
+      ] as ExpressionFilterSpecification,
+      layout: {
+        "icon-image": flareSymbol,
+        "icon-allow-overlap": true,
+      },
+    },
+
+    // --- Light description text (LITDSN02) ---
+    ...LITDSN02(config),
+  ];
+}
+
+/**
+ * LITDSN02 - 10.6.3 Light description text string
+ * (S-52 PresLib 4.0, section 10.6.3)
+ *
+ * Builds the standard light description from S-57 attributes:
+ *   LITCHR + SIGGRP + COLOUR + SIGPER + HEIGHT + VALNMR + STATUS
+ *   e.g. "Fl(2) WR 10s 15m 15M"
+ *
+ * LITCHR and SIGPER are scalar. COLOUR, CATLIT, STATUS are list attributes
+ * stored as JSON strings. SIGGRP is a string like "(2)" or "(2+1)".
+ */
+function LITDSN02(config: LayerConfig): Partial<LayerSpecification>[] {
+  const { mode } = config;
+
+  // LITCHR code → abbreviation (S-57 attribute enumeration)
+  const litchrAbbrev: ExpressionSpecification = [
+    "match",
+    ["get", "LITCHR"],
+    1,
+    "F",
+    2,
+    "Fl",
+    3,
+    "LFl",
+    4,
+    "Q",
+    5,
+    "VQ",
+    6,
+    "UQ",
+    7,
+    "Iso",
+    8,
+    "Oc",
+    9,
+    "IQ",
+    10,
+    "IVQ",
+    11,
+    "IUQ",
+    12,
+    "Mo",
+    13,
+    "FFl",
+    14,
+    "Fl+LFl",
+    15,
+    "OcFl",
+    16,
+    "FLFl",
+    17,
+    "AlOc",
+    18,
+    "AlLFl",
+    19,
+    "AlFl",
+    20,
+    "Al",
+    25,
+    "Q+LFl",
+    26,
+    "VQ+LFl",
+    27,
+    "UQ+LFl",
+    28,
+    "Al",
+    29,
+    "AlFFl",
+    "",
+  ];
+
+  // COLOUR abbreviations for lights via list membership on the JSON array
+  // COLOUR is stored as e.g. '["1","3"]' for white+red
+  const colourAbbrev: ExpressionSpecification = [
+    "concat",
+    ["case", listContains("COLOUR", "1"), "W", ""],
+    ["case", listContains("COLOUR", "3"), "R", ""],
+    ["case", listContains("COLOUR", "4"), "G", ""],
+    ["case", listContains("COLOUR", "6"), "Y", ""],
+    ["case", listContains("COLOUR", "11"), "Y", ""],
+    ["case", listContains("COLOUR", "5"), "Bu", ""],
+    ["case", listContains("COLOUR", "10"), "Vi", ""],
+  ];
+
+  // CATLIT prefix (directional, aeronautical, fog detector)
+  const catlitPrefix: ExpressionSpecification = [
+    "case",
+    ["!", ["has", "CATLIT"]],
+    "",
+    listContains("CATLIT", "1"),
+    "Dir ",
+    listContains("CATLIT", "5"),
+    "Aero ",
+    listContains("CATLIT", "7"),
+    "Fog Det Lt ",
+    "",
+  ];
+
+  // STATUS suffix
+  const statusSuffix: ExpressionSpecification = [
+    "case",
+    ["!", ["has", "STATUS"]],
+    "",
+    listContains("STATUS", "2"),
+    "(occas)",
+    listContains("STATUS", "7"),
+    "(temp)",
+    listContains("STATUS", "8"),
+    "(priv)",
+    listContains("STATUS", "11"),
+    "(exting)",
+    listContains("STATUS", "17"),
+    "(U)",
+    "",
+  ];
+
+  // Build the full description string
+  const textField: ExpressionSpecification = [
+    "concat",
+    // CATLIT prefix (e.g. "Dir ")
+    catlitPrefix,
+    // Light characteristic (e.g. "Fl")
+    ["case", ["has", "LITCHR"], litchrAbbrev, ""],
+    // Signal group (e.g. "(2)") — SIGGRP is a string attribute
+    ["case", ["has", "SIGGRP"], ["get", "SIGGRP"], ""],
+    // Space + colour abbreviations
+    ["case", ["has", "COLOUR"], ["concat", " ", colourAbbrev], ""],
+    // Space + signal period in seconds
+    [
+      "case",
+      ["has", "SIGPER"],
+      ["concat", " ", ["number-format", ["get", "SIGPER"], {}], "s"],
+      "",
+    ],
+    // Space + height in metres
+    [
+      "case",
+      ["has", "HEIGHT"],
+      [
+        "concat",
+        " ",
+        ["number-format", ["get", "HEIGHT"], { "max-fraction-digits": 0 }],
+        "m",
+      ],
+      "",
+    ],
+    // Space + nominal range in nautical miles
+    [
+      "case",
+      ["has", "VALNMR"],
+      [
+        "concat",
+        " ",
+        ["number-format", ["get", "VALNMR"], { "max-fraction-digits": 0 }],
+        "M",
+      ],
+      "",
+    ],
+    // STATUS suffix (e.g. "(temp)")
+    statusSuffix,
+  ];
+
+  return [
+    {
+      type: "symbol",
+      layout: {
+        "text-field": textField,
+        "text-font": ["Metropolis Regular"],
+        "text-size": 10,
+        "text-offset": [2, 0],
+        "text-anchor": "left",
+        "text-allow-overlap": false,
+      },
+      paint: {
+        "text-color": colour(mode, "CHBLK"),
+        "text-halo-color": colour(mode, "NODTA"),
+        "text-halo-width": 1,
+      },
+      metadata: { "s52:display": "23" },
+    },
+  ];
+}
 /**
  * OBSTRN07 - 13.2.5 Obstructions and rocks (S-52 PresLib 4.0, section 13.2.5)
  *

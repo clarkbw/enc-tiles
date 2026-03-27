@@ -1,4 +1,7 @@
-import { ExpressionFilterSpecification } from "maplibre-gl";
+import {
+  ExpressionFilterSpecification,
+  ExpressionSpecification,
+} from "maplibre-gl";
 
 /**
  * Helper for constructing `all` expressions.
@@ -133,6 +136,26 @@ export function listIncludes(
   );
   if (conditions.length === 1) return conditions[0]!;
   return ["any", ...conditions];
+}
+
+/**
+ * Test whether a list-type attribute contains a given value, for use in
+ * expression contexts (paint, layout) rather than filter contexts.
+ *
+ * @example
+ *   // Does COLOUR include "1" (white)?
+ *   listContains("COLOUR", "1")
+ *   // → ["in", "\"1\"", ["get", "COLOUR"]]
+ */
+export function listContains(
+  attr: string,
+  value: string,
+): ExpressionSpecification {
+  return [
+    "in",
+    `"${value}"`,
+    ["get", attr],
+  ] as unknown as ExpressionSpecification;
 }
 
 /**
