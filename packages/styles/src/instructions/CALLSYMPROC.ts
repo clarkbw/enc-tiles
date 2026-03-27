@@ -1391,25 +1391,25 @@ export function SLCONS04(config: LayerConfig): Partial<LayerSpecification>[] {
 
 /** SEABED01 - 13.2.14 Colour fill for depth areas */
 export function SEABED01(config: LayerConfig): ExpressionSpecification {
-  const { mode, shallowDepth, safetyDepth, deepDepth } = config;
+  const { mode, shallowContour, safetyContour, deepContour } = config;
   return [
     "case",
     [
       "all",
-      [">=", ["var", "drval1"], deepDepth],
-      [">", ["var", "drval2"], deepDepth],
+      [">=", ["var", "drval1"], deepContour],
+      [">", ["var", "drval2"], deepContour],
     ],
     colour(mode, "DEPDW"),
     [
       "all",
-      [">=", ["var", "drval1"], safetyDepth],
-      [">", ["var", "drval2"], safetyDepth],
+      [">=", ["var", "drval1"], safetyContour],
+      [">", ["var", "drval2"], safetyContour],
     ],
     colour(mode, "DEPMD"),
     [
       "all",
-      [">=", ["var", "drval1"], shallowDepth],
-      [">", ["var", "drval2"], shallowDepth],
+      [">=", ["var", "drval1"], shallowContour],
+      [">", ["var", "drval2"], shallowContour],
     ],
     colour(mode, "DEPMS"),
     ["all", [">=", ["var", "drval1"], 0], [">", ["var", "drval2"], 0]],
@@ -1668,7 +1668,7 @@ export function isolatedDanger(
   return [
     "all",
     ["has", "VALSOU"],
-    ["<=", ["get", "VALSOU"], config.safetyDepth],
+    ["<=", ["get", "VALSOU"], config.safetyContour],
     // WATLEV 1 (partly submerged) and 2 (always dry) are above-water dangers
     // that don't get the isolated danger symbol
     [

@@ -11,14 +11,26 @@ import { instructionsToStyles } from "../instructions/index.js";
 import * as filters from "../filters.js";
 import { groupBy } from "../utils.js";
 
+export type DisplayCategory = "DISPLAYBASE" | "STANDARD" | "OTHER";
+export type TextGroup = "important" | "other";
+
 export interface LayerConfig {
   mode: Mode;
   source: string;
-  shallowDepth: number;
+  /** SHALLOW_CONTOUR: depth area colouring threshold (S-52 default: 2m) */
+  shallowContour: number;
+  /** SAFETY_CONTOUR: isolated danger and safety contour threshold (S-52 default: 30m) */
+  safetyContour: number;
+  /** DEEP_CONTOUR: depth area colouring threshold (S-52 default: 30m) */
+  deepContour: number;
+  /** SAFETY_DEPTH: sounding colour threshold (S-52 default: 30m) */
   safetyDepth: number;
-  deepDepth: number;
   boundaries?: BoundaryType;
   symbols?: SymbolType;
+  /** Display categories to show. Omit to show all. */
+  displayCategories?: Set<DisplayCategory>;
+  /** Text groups to show. Omit to show all. */
+  textGroups?: Set<TextGroup>;
 }
 
 export enum BoundaryType {
@@ -125,6 +137,8 @@ export function lookupToLayers(
 ): LayerSpecification[] {
   const baseId = lookupId(lookup);
   return instructionsToStyles(lookup.inst, config).map((layer, index) => {
+    const visibility = layerVisibility(lookup, layer, config);
+
     return {
       ...layer,
       metadata: {
@@ -141,6 +155,7 @@ export function lookupToLayers(
       layout: {
         ...layer.layout,
         [`${layer.type}-sort-key`]: sortKey(lookup.dpri, layer),
+        ...(visibility === "none" ? { visibility } : {}),
       },
       source: "enc",
       "source-layer": lookup.obcl,
@@ -177,6 +192,34 @@ export function getLookups({
   ];
 
   return s52.lookups.filter((l) => sets.includes(l.tnam)) as LookupEntry[];
+}
+
+/**
+ * Determine layer visibility based on display category and text group settings.
+ */
+function layerVisibility(
+  lookup: LookupEntry,
+  layer: Partial<LayerSpecification>,
+  config: LayerConfig,
+): "visible" | "none" {
+  // Check display category
+  if (config.displayCategories && lookup.disc) {
+    if (!config.displayCategories.has(lookup.disc as DisplayCategory)) {
+      return "none";
+    }
+  }
+
+  // Check text group
+  const textDisplay = (layer as { metadata?: { "s52:display"?: string } })
+    .metadata?.["s52:display"];
+  if (config.textGroups && textDisplay) {
+    const group: TextGroup = textDisplay === "50" ? "other" : "important";
+    if (!config.textGroups.has(group)) {
+      return "none";
+    }
+  }
+
+  return "visible";
 }
 
 const TypePriority = { symbol: 1, line: 2, fill: 3 };
