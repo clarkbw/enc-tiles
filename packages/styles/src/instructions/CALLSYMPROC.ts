@@ -9,7 +9,7 @@ import { LineStyles } from "./SHOWLINE.js";
 import { quaposLowQuality } from "../filters.js";
 import type { LayerConfig } from "../symbolology/index.js";
 
-const procs = { DEPARE03, DEPCNT03, RESTRN01, SOUNDG03, WRECKS05 };
+const procs = { DEPARE03, DEPCNT03, OBSTRN07, RESTRN01, SOUNDG03, WRECKS05 };
 
 export function CS(config: LayerConfig, ref: Reference) {
   if (ref.name in procs) {
@@ -77,7 +77,393 @@ export function DEPCNT03(config: LayerConfig): Partial<LayerSpecification>[] {
 /** TODO: DEPVAL02 - 13.2.3 Depth value */
 /** TODO: LIGHTS06 - 13.2.4 Light flares, light sectors & light coverage */
 /** TODO: LITDSN02 - 10.6.3 Light description text string */
-/** TODO: OBSTRN07 - 13.2.5 Obstructions and rocks */
+/**
+ * OBSTRN07 - 13.2.5 Obstructions and rocks (S-52 PresLib 4.0, section 13.2.5)
+ *
+ * Applies to S-57 object classes OBSTRN (obstruction) and UWTROC (underwater rock).
+ * Attributes: VALSOU, CATOBS, WATLEV, EXPSOU
+ * Geometry: Point, Line, Area
+ *
+ * Point obstructions (Continuation A):
+ *   - Isolated danger → ISODGR01
+ *   - UWTROC: WATLEV 3 → UWTROC03, else → UWTROC04
+ *   - OBSTRN with VALSOU: shallow → DANGER01, deep → DANGER02
+ *   - OBSTRN with CATOBS 6 (foul area): WATLEV 1,2 → OBSTRN11, WATLEV 4,5 → OBSTRN03, else → DANGER01
+ *   - OBSTRN without VALSOU: CATOBS 6 → OBSTRN01, WATLEV 1,2 → OBSTRN11,
+ *     WATLEV 4,5 → UWTROC04, else → DANGER01
+ *
+ * Line obstructions (Continuation B):
+ *   - Isolated danger → ISODGR01 + dotted CHBLK
+ *   - Shallow/no sounding → dotted CHBLK
+ *   - Deep → dashed CHBLK
+ *
+ * Area obstructions (Continuation C):
+ *   - Isolated danger → DEPVS fill + FOULAR01 pattern + dotted CHBLK + ISODGR01
+ *   - With VALSOU: shallow → dotted CHBLK, deep → dashed CHGRD
+ *   - CATOBS 6 → FOULAR01 pattern + dotted CHBLK
+ *   - WATLEV 1,2 → CHBRN fill + solid CSTLN
+ *   - WATLEV 4 → DEPIT fill + dashed CSTLN
+ *   - Default → DEPVS fill + dotted CHBLK
+ */
+export function OBSTRN07(config: LayerConfig): Partial<LayerSpecification>[] {
+  const { mode, safetyDepth } = config;
+  const isDanger = isolatedDanger(config);
+  const notDanger = notIsolatedDanger(config);
+
+  return [
+    // ─── Point obstructions (Continuation A) ───
+
+    // Isolated danger → ISODGR01
+    {
+      type: "symbol",
+      filter: ["all", ["==", ["geometry-type"], "Point"], isDanger],
+      layout: { "icon-image": "ISODGR01", "icon-allow-overlap": true },
+    },
+
+    // Not isolated danger, no VALSOU, UWTROC class
+    // The lookup table separates UWTROC and OBSTRN into different source-layers,
+    // so we use the source-layer name to distinguish them. UWTROC without VALSOU:
+    // WATLEV 3 → UWTROC03, else → UWTROC04
+    // (Features with VALSOU are handled by the VALSOU branches below)
+
+    // Has VALSOU, not isolated danger, CATOBS 6 (foul area)
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Point"],
+        notDanger,
+        ["has", "VALSOU"],
+        ["==", ["get", "CATOBS"], 6],
+        ["in", ["get", "WATLEV"], ["literal", [1, 2]]],
+      ],
+      layout: { "icon-image": "OBSTRN11", "icon-allow-overlap": true },
+    },
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Point"],
+        notDanger,
+        ["has", "VALSOU"],
+        ["==", ["get", "CATOBS"], 6],
+        ["in", ["get", "WATLEV"], ["literal", [4, 5]]],
+      ],
+      layout: { "icon-image": "OBSTRN03", "icon-allow-overlap": true },
+    },
+
+    // Has VALSOU, not isolated danger, not CATOBS 6, VALSOU <= safetyDepth → DANGER01
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Point"],
+        notDanger,
+        ["has", "VALSOU"],
+        ["!=", ["get", "CATOBS"], 6],
+        ["<=", ["get", "VALSOU"], safetyDepth],
+      ],
+      layout: { "icon-image": "DANGER01", "icon-allow-overlap": true },
+    },
+
+    // Has VALSOU, not isolated danger, not CATOBS 6, VALSOU > safetyDepth → DANGER02
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Point"],
+        notDanger,
+        ["has", "VALSOU"],
+        ["!=", ["get", "CATOBS"], 6],
+        [">", ["get", "VALSOU"], safetyDepth],
+      ],
+      layout: { "icon-image": "DANGER02", "icon-allow-overlap": true },
+    },
+
+    // Sounding text on point obstructions with VALSOU (SNDFRM04)
+    SNDFRM04(config, "VALSOU", [
+      "all",
+      ["==", ["geometry-type"], "Point"],
+      notDanger,
+      ["has", "VALSOU"],
+    ]),
+
+    // No VALSOU, not isolated danger → symbol by CATOBS/WATLEV
+    {
+      type: "symbol",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Point"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+      ],
+      layout: {
+        "icon-image": [
+          "case",
+          // CATOBS 6 (foul area) → OBSTRN01
+          ["==", ["get", "CATOBS"], 6],
+          "OBSTRN01",
+          // WATLEV 1,2 (dry/partly submerged) → OBSTRN11
+          ["in", ["get", "WATLEV"], ["literal", [1, 2]]],
+          "OBSTRN11",
+          // WATLEV 4,5 (covers/uncovers, awash) → UWTROC04
+          ["in", ["get", "WATLEV"], ["literal", [4, 5]]],
+          "UWTROC04",
+          // Default → DANGER01
+          "DANGER01",
+        ] as ExpressionSpecification,
+        "icon-allow-overlap": true,
+      },
+    },
+
+    // ─── Line obstructions (Continuation B) ───
+
+    // Isolated danger → dotted CHBLK + ISODGR01 at midpoint
+    {
+      type: "line",
+      filter: ["all", ["==", ["geometry-type"], "LineString"], isDanger],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+    {
+      type: "symbol",
+      filter: ["all", ["==", ["geometry-type"], "LineString"], isDanger],
+      layout: {
+        "icon-image": "ISODGR01",
+        "icon-allow-overlap": true,
+        "symbol-placement": "line",
+      },
+    },
+
+    // Not isolated danger, shallow or no sounding → dotted CHBLK
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "LineString"],
+        notDanger,
+        [
+          "any",
+          ["!", ["has", "VALSOU"]],
+          ["<=", ["get", "VALSOU"], safetyDepth],
+        ],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+
+    // Not isolated danger, deep sounding → dashed CHBLK
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "LineString"],
+        notDanger,
+        ["has", "VALSOU"],
+        [">", ["get", "VALSOU"], safetyDepth],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DASH,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+
+    // ─── Area obstructions (Continuation C) ───
+
+    // Isolated danger area: DEPVS fill + FOULAR01 pattern + dotted CHBLK + ISODGR01
+    {
+      type: "fill",
+      filter: ["all", ["==", ["geometry-type"], "Polygon"], isDanger],
+      paint: { "fill-color": colour(mode, "DEPVS") },
+    },
+    {
+      type: "fill",
+      filter: ["all", ["==", ["geometry-type"], "Polygon"], isDanger],
+      paint: { "fill-pattern": "FOULAR01" },
+    },
+    {
+      type: "line",
+      filter: ["all", ["==", ["geometry-type"], "Polygon"], isDanger],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+    {
+      type: "symbol",
+      filter: ["all", ["==", ["geometry-type"], "Polygon"], isDanger],
+      layout: { "icon-image": "ISODGR01", "icon-allow-overlap": true },
+    },
+
+    // Not isolated danger, has VALSOU, shallow → dotted CHBLK outline
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["has", "VALSOU"],
+        ["<=", ["get", "VALSOU"], safetyDepth],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+
+    // Not isolated danger, has VALSOU, deep → dashed CHGRD outline
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["has", "VALSOU"],
+        [">", ["get", "VALSOU"], safetyDepth],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DASH,
+        "line-width": 2,
+        "line-color": colour(mode, "CHGRD"),
+      },
+    },
+
+    // Sounding text on area obstructions with VALSOU (SNDFRM04)
+    SNDFRM04(config, "VALSOU", [
+      "all",
+      ["==", ["geometry-type"], "Polygon"],
+      notDanger,
+      ["has", "VALSOU"],
+    ]),
+
+    // Not isolated danger, no VALSOU: fill + outline by CATOBS/WATLEV
+    // CATOBS 6 → FOULAR01 pattern + dotted CHBLK
+    {
+      type: "fill",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["==", ["get", "CATOBS"], 6],
+      ],
+      paint: { "fill-pattern": "FOULAR01" },
+    },
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["==", ["get", "CATOBS"], 6],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+
+    // WATLEV 1,2 → CHBRN fill + solid CSTLN
+    {
+      type: "fill",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["in", ["get", "WATLEV"], ["literal", [1, 2]]],
+      ],
+      paint: { "fill-color": colour(mode, "CHBRN") },
+    },
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["in", ["get", "WATLEV"], ["literal", [1, 2]]],
+      ],
+      paint: {
+        "line-width": 2,
+        "line-color": colour(mode, "CSTLN"),
+      },
+    },
+
+    // WATLEV 4 → DEPIT fill + dashed CSTLN
+    {
+      type: "fill",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["==", ["get", "WATLEV"], 4],
+      ],
+      paint: { "fill-color": colour(mode, "DEPIT") },
+    },
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["==", ["get", "WATLEV"], 4],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DASH,
+        "line-width": 2,
+        "line-color": colour(mode, "CSTLN"),
+      },
+    },
+
+    // Default (WATLEV 3, 5, or missing) → DEPVS fill + dotted CHBLK
+    {
+      type: "fill",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["!", ["in", ["get", "WATLEV"], ["literal", [1, 2, 4]]]],
+      ],
+      paint: { "fill-color": colour(mode, "DEPVS") },
+    },
+    {
+      type: "line",
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        notDanger,
+        ["!", ["has", "VALSOU"]],
+        ["!=", ["get", "CATOBS"], 6],
+        ["!", ["in", ["get", "WATLEV"], ["literal", [1, 2, 4]]]],
+      ],
+      paint: {
+        "line-dasharray": LineStyles.DOTT,
+        "line-width": 2,
+        "line-color": colour(mode, "CHBLK"),
+      },
+    },
+  ];
+}
 /** TODO: QUAPOS01 - 13.2.6 Quality(accuracy) of position */
 /** TODO: QUALIN01 - 13.2.7 Quality of position of line objects */
 /** TODO: QUAPNT02 - 13.2.8 Quality of position of point and area objects */
@@ -160,46 +546,47 @@ export function SEABED01(config: LayerConfig): ExpressionSpecification {
   ];
 }
 
-/** SNDFRM04 - 13.2.15 Symbolizing soundings, including safety depth */
-
 /**
- * SOUNDG03 - 13.2.16 Entry procedure for symbolizing soundings
+ * SNDFRM04 - 13.2.15 Symbolizing soundings, including safety depth
+ * (S-52 PresLib 4.0, section 13.2.15)
  *
- * S-57 SOUNDG features are MultiPoint, but the tile pipeline splits them into
- * individual points with a DEPTH attribute (SPLIT_MULTIPOINT=ON, ADD_SOUNDG_DEPTH=ON).
+ * Formats a depth value as text for display. Called by SOUNDG03, WRECKS05,
+ * and OBSTRN07 when features have a sounding value (DEPTH or VALSOU).
  *
- * The S-52 spec composites individual digit symbols (SOUNDG10, SOUNDG25, etc.) to render
- * depth values. MapLibre can't composite multiple symbols per feature, so we render
- * soundings as formatted text instead, matching the visual intent:
+ * The S-52 spec composites individual digit symbols (SOUNDG10, SOUNDG25, etc.).
+ * MapLibre can't composite multiple symbols per feature, so we render as
+ * formatted text instead, matching the visual intent:
  *   - Depths < 10: show one decimal (e.g. "3.5")
  *   - Depths 10–30: show one decimal if non-zero (e.g. "15.2"), else integer ("15")
  *   - Depths > 30: integer only ("45")
- *   - Negative depths (drying heights): prefixed with minus
  *   - Colour: SNDG2 (shallow/black) when depth <= safetyDepth, SNDG1 (deep/grey) otherwise
+ *
+ * @param depthAttr - The attribute name containing the depth value ("DEPTH" or "VALSOU")
+ * @param filter - Optional additional filter to apply to the layer
  */
-export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
+export function SNDFRM04(
+  config: LayerConfig,
+  depthAttr: string = "DEPTH",
+  filter?: ExpressionFilterSpecification,
+): Partial<LayerSpecification> {
   const { mode, safetyDepth } = config;
-  const depth: ExpressionSpecification = ["get", "DEPTH"];
+  const depth: ExpressionSpecification = ["get", depthAttr];
   const absDepth: ExpressionSpecification = ["abs", depth];
 
-  // S-52 formatting rules for sounding values
   const textField: ExpressionSpecification = [
     "case",
-    // Depths < 10: always show one decimal
     ["<", absDepth, 10],
     [
       "number-format",
       depth,
       { "min-fraction-digits": 1, "max-fraction-digits": 1 },
     ],
-    // Depths 10–30: show one decimal if fractional part is non-zero
     ["all", ["<=", absDepth, 30], ["!=", ["%", absDepth, 1], 0]],
     [
       "number-format",
       depth,
       { "min-fraction-digits": 1, "max-fraction-digits": 1 },
     ],
-    // Otherwise: integer only
     [
       "number-format",
       depth,
@@ -207,7 +594,6 @@ export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
     ],
   ];
 
-  // Colour by depth relative to safety depth
   const textColor: ExpressionSpecification = [
     "case",
     ["<=", depth, safetyDepth],
@@ -215,24 +601,33 @@ export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
     colour(mode, "SNDG1"),
   ];
 
-  return [
-    {
-      type: "symbol",
-      filter: ["has", "DEPTH"],
-      layout: {
-        "text-field": textField,
-        "text-font": ["Metropolis Regular"],
-        "text-size": 11,
-        "text-allow-overlap": false,
-        "symbol-placement": "point",
-      },
-      paint: {
-        "text-color": textColor,
-        "text-halo-color": colour(mode, "NODTA"),
-        "text-halo-width": 1,
-      },
+  return {
+    type: "symbol",
+    ...(filter ? { filter } : {}),
+    layout: {
+      "text-field": textField,
+      "text-font": ["Metropolis Regular"],
+      "text-size": 11,
+      "text-allow-overlap": false,
+      "symbol-placement": "point",
     },
-  ];
+    paint: {
+      "text-color": textColor,
+      "text-halo-color": colour(mode, "NODTA"),
+      "text-halo-width": 1,
+    },
+  };
+}
+
+/**
+ * SOUNDG03 - 13.2.16 Entry procedure for symbolizing soundings
+ *
+ * S-57 SOUNDG features are MultiPoint, but the tile pipeline splits them into
+ * individual points with a DEPTH attribute (SPLIT_MULTIPOINT=ON, ADD_SOUNDG_DEPTH=ON).
+ * Delegates to SNDFRM04 for depth value formatting.
+ */
+export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
+  return [SNDFRM04(config, "DEPTH", ["has", "DEPTH"])];
 }
 /** SYMINS02 - 13.2.17 Symbolizing encoded objects specified by IMO */
 /** TOPMAR01 - 13.2.18 Topmarks */
@@ -363,6 +758,14 @@ export function WRECKS05(config: LayerConfig): Partial<LayerSpecification>[] {
         "icon-allow-overlap": true,
       },
     },
+
+    // Sounding text on top of DANGER symbols (SNDFRM04)
+    SNDFRM04(config, "VALSOU", [
+      "all",
+      ["==", ["geometry-type"], "Point"],
+      notDanger,
+      ["has", "VALSOU"],
+    ]),
 
     // No sounding → symbol by CATWRK/WATLEV (S-52 Continuation A lookup table)
     {
@@ -495,6 +898,14 @@ export function WRECKS05(config: LayerConfig): Partial<LayerSpecification>[] {
         "line-color": colour(mode, "CSTLN"),
       },
     },
+
+    // Sounding text on area wrecks with VALSOU (SNDFRM04)
+    SNDFRM04(config, "VALSOU", [
+      "all",
+      ["==", ["geometry-type"], "Polygon"],
+      notDanger,
+      ["has", "VALSOU"],
+    ]),
 
     // Area wreck isolated danger symbol at center
     {
