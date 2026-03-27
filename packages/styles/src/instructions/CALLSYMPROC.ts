@@ -39,16 +39,18 @@ export function DEPARE03(): Partial<LayerSpecification>[] {
 
 /** DEPCNT03 - 13.2.2 Depth contours, including safety contour */
 export function DEPCNT03(): Partial<LayerSpecification>[] {
-  // MapLibre doesn't express data expressions in `line-dasharray`, so need to split into two layers with filters
-  const qualityExpression: ExpressionSpecification = [
+  // MapLibre doesn't support data expressions in `line-dasharray`, so split into two layers with filters.
+  // QUAPOS values 1 (surveyed), 10 (precise), 11 (calculated) indicate good quality → solid lines.
+  // Any other QUAPOS value indicates low quality → dashed lines.
+  const lowQualityExpression: ExpressionSpecification = [
     "all",
     ["has", "QUAPOS"],
-    ["in", ["get", "QUAPOS"], ["literal", ["1", "10", "11"]]],
+    ["!", ["in", ["get", "QUAPOS"], ["literal", [1, 10, 11]]]],
   ];
   return [
     {
       type: "line",
-      filter: qualityExpression,
+      filter: lowQualityExpression,
       paint: {
         "line-dasharray": LineStyles.DASH,
         "line-width": 1,
@@ -57,7 +59,7 @@ export function DEPCNT03(): Partial<LayerSpecification>[] {
     },
     {
       type: "line",
-      filter: ["!", qualityExpression],
+      filter: ["!", lowQualityExpression],
       paint: {
         "line-width": 1,
         "line-color": colours.DAY.DEPCN,
