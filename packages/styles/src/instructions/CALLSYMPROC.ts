@@ -2,19 +2,20 @@ import { ExpressionSpecification, LayerSpecification } from "maplibre-gl";
 import { Reference } from "./parser.js";
 import { colours } from "@enc-tiles/s52";
 import { LineStyles } from "./SHOWLINE.js";
+import type { LayerConfig } from "../symbolology/index.js";
 
 const procs = { DEPARE03, DEPCNT03, RESTRN01 };
 
-export function CS(ref: Reference) {
+export function CS(ref: Reference, config: LayerConfig) {
   if (ref.name in procs) {
-    return procs[ref.name]();
+    return procs[ref.name](config);
   } else {
     console.warn(`CS(${ref.name}) not implemented yet`);
   }
 }
 
 /** DEPARE03 - 13.2.1 Depth area colour fill and dredged area pattern fill */
-export function DEPARE03(): Partial<LayerSpecification>[] {
+export function DEPARE03(config: LayerConfig): Partial<LayerSpecification>[] {
   return [
     {
       type: "fill",
@@ -27,7 +28,7 @@ export function DEPARE03(): Partial<LayerSpecification>[] {
             "let",
             "drval2",
             ["coalesce", ["get", "DRVAL2"], ["+", ["var", "drval1"], 0.01]],
-            SEABED01(),
+            SEABED01(config),
           ],
         ],
         // TODO: shallow pattern
@@ -38,7 +39,7 @@ export function DEPARE03(): Partial<LayerSpecification>[] {
 }
 
 /** DEPCNT03 - 13.2.2 Depth contours, including safety contour */
-export function DEPCNT03(): Partial<LayerSpecification>[] {
+export function DEPCNT03(_config: LayerConfig): Partial<LayerSpecification>[] {
   // MapLibre doesn't support data expressions in `line-dasharray`, so split into two layers with filters.
   // QUAPOS values 1 (surveyed), 10 (precise), 11 (calculated) indicate good quality → solid lines.
   // Any other QUAPOS value indicates low quality → dashed lines.
@@ -83,7 +84,7 @@ export function DEPCNT03(): Partial<LayerSpecification>[] {
 /** TODO: RESARE04 - 13.2.9 Restricted areas - object class RESARE  */
 
 /** RESTRN01 - 13.2.10 Entry procedure for restrictions */
-export function RESTRN01(): Partial<LayerSpecification>[] {
+export function RESTRN01(_config: LayerConfig): Partial<LayerSpecification>[] {
   return [
     // {
     //   filter: ['has', 'RESTRN'],
@@ -131,12 +132,9 @@ export function SAFECON01(): Partial<LayerSpecification>[] {
 /** SLCONS04 - 13.2.13 Shoreline constructions, including accuracy of position */
 
 /** SEABED01 - 13.2.14 Colour fill for depth areas */
-export function SEABED01({
-  theme = colours.DAY,
-  shallowDepth = 2.0,
-  safetyDepth = 6.0,
-  deepDepth = 30.0,
-} = {}): ExpressionSpecification {
+export function SEABED01(config: LayerConfig): ExpressionSpecification {
+  const theme = colours[config.mode];
+  const { shallowDepth, safetyDepth, deepDepth } = config;
   return [
     "case",
     [

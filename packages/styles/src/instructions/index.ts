@@ -1,10 +1,11 @@
-import { parse } from "./parser.js";
+import { parse, Reference } from "./parser.js";
 import { CS } from "./CALLSYMPROC.js";
 import { AC, AP } from "./SHOWAREA.js";
 import { LC, LS } from "./SHOWLINE.js";
 import { SY } from "./SHOWPOINT.js";
 import { TX, TE } from "./SHOWTEXT.js";
 import type { LayerSpecification } from "maplibre-gl";
+import type { LayerConfig } from "../symbolology/index.js";
 
 export * from "./parser.js";
 export * from "./CALLSYMPROC.js";
@@ -13,15 +14,20 @@ export * from "./SHOWLINE.js";
 export * from "./SHOWPOINT.js";
 export * from "./SHOWTEXT.js";
 
-const commands = { AC, AP, CS, LC, LS, SY, TE, TX };
+const commands = { AC, AP, LC, LS, SY, TE, TX };
 
 export function instructionsToStyles(
   instruction: string | undefined,
+  config: LayerConfig,
 ): Partial<LayerSpecification>[] {
   if (typeof instruction !== "string") return [];
 
   return parse(instruction)
     .flatMap((instruction) => {
+      if (instruction.command === "CS") {
+        return CS(instruction.params[0] as Reference, config);
+      }
+
       const command = commands[instruction.command];
 
       if (!command) {

@@ -51,9 +51,9 @@ export function build(config: LayerConfig): LayerSpecification[] {
         );
 
       if (lookups.length <= 1) {
-        return lookups.flatMap(lookupToLayers);
+        return lookups.flatMap((l) => lookupToLayers(l, config));
       } else {
-        return lookupGroupToLayers(lookups);
+        return lookupGroupToLayers(lookups, config);
       }
     },
   );
@@ -76,6 +76,7 @@ export function build(config: LayerConfig): LayerSpecification[] {
  */
 export function lookupGroupToLayers(
   lookups: LookupEntry[],
+  config: LayerConfig,
 ): LayerSpecification[] {
   const [fallbackLookup, ...otherLookups] = lookups;
 
@@ -89,7 +90,7 @@ export function lookupGroupToLayers(
     ],
   ];
   return [
-    ...lookupToLayers(fallbackLookup!).map((layer) => ({
+    ...lookupToLayers(fallbackLookup!, config).map((layer) => ({
       ...layer,
       ...("filter" in layer
         ? {
@@ -100,14 +101,17 @@ export function lookupGroupToLayers(
           }
         : {}),
     })),
-    ...otherLookups.flatMap(lookupToLayers),
+    ...otherLookups.flatMap((l) => lookupToLayers(l, config)),
   ];
 }
 
 let i = 0;
 
-export function lookupToLayers(lookup: LookupEntry): LayerSpecification[] {
-  return instructionsToStyles(lookup.inst).map((layer) => {
+export function lookupToLayers(
+  lookup: LookupEntry,
+  config: LayerConfig,
+): LayerSpecification[] {
+  return instructionsToStyles(lookup.inst, config).map((layer) => {
     return {
       ...layer,
       metadata: {
