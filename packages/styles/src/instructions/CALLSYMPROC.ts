@@ -16,6 +16,7 @@ const procs = {
   RESARE04,
   RESTRN01,
   SOUNDG03,
+  TOPMAR01,
   WRECKS05,
 };
 
@@ -958,7 +959,132 @@ export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
   return [SNDFRM04(config, "DEPTH", ["has", "DEPTH"])];
 }
 /** SYMINS02 - 13.2.17 Symbolizing encoded objects specified by IMO */
-/** TOPMAR01 - 13.2.18 Topmarks */
+// TOPSHP → symbol name lookup tables (S-52 PresLib 4.0, section 13.2.18)
+// Floating platforms: buoys, light floats, light vessels
+// Rigid platforms: beacons, daymarks, landmarks, etc.
+// Exported for future use when pipeline adds _FLOATING attribute
+export const TOPSHP_FLOATING: Record<number, string> = {
+  1: "TOPMAR02",
+  2: "TOPMAR04",
+  3: "TOPMAR10",
+  4: "TOPMAR12",
+  5: "TOPMAR13",
+  6: "TOPMAR14",
+  7: "TOPMAR65",
+  8: "TOPMAR17",
+  9: "TOPMAR16",
+  10: "TOPMAR08",
+  11: "TOPMAR07",
+  12: "TOPMAR14",
+  13: "TOPMAR05",
+  14: "TOPMAR06",
+  15: "TMARDEF2",
+  16: "TMARDEF2",
+  17: "TMARDEF2",
+  18: "TOPMAR10",
+  19: "TOPMAR13",
+  20: "TOPMAR14",
+  21: "TOPMAR13",
+  22: "TOPMAR14",
+  23: "TOPMAR14",
+  24: "TOPMAR02",
+  25: "TOPMAR04",
+  26: "TOPMAR10",
+  27: "TOPMAR17",
+  28: "TOPMAR18",
+  29: "TOPMAR02",
+  30: "TOPMAR17",
+  31: "TOPMAR14",
+  32: "TOPMAR10",
+  33: "TMARDEF2",
+};
+
+const TOPSHP_RIGID: Record<number, string> = {
+  1: "TOPMAR22",
+  2: "TOPMAR24",
+  3: "TOPMAR30",
+  4: "TOPMAR32",
+  5: "TOPMAR33",
+  6: "TOPMAR34",
+  7: "TOPMAR85",
+  8: "TOPMAR86",
+  9: "TOPMAR36",
+  10: "TOPMAR28",
+  11: "TOPMAR27",
+  12: "TOPMAR14",
+  13: "TOPMAR25",
+  14: "TOPMAR26",
+  15: "TOPMAR88",
+  16: "TOPMAR87",
+  17: "TMARDEF1",
+  18: "TOPMAR30",
+  19: "TOPMAR33",
+  20: "TOPMAR34",
+  21: "TOPMAR33",
+  22: "TOPMAR34",
+  23: "TOPMAR34",
+  24: "TOPMAR22",
+  25: "TOPMAR24",
+  26: "TOPMAR30",
+  27: "TOPMAR86",
+  28: "TOPMAR89",
+  29: "TOPMAR22",
+  30: "TOPMAR86",
+  31: "TOPMAR14",
+  32: "TOPMAR30",
+  33: "TMARDEF1",
+};
+
+/**
+ * Build a MapLibre match expression for TOPSHP → symbol name.
+ */
+function topshpMatch(table: Record<number, string>, fallback: string) {
+  const cases: (number | string)[] = [];
+  for (const [topshp, symbol] of Object.entries(table)) {
+    cases.push(Number(topshp), symbol);
+  }
+  return ["match", ["get", "TOPSHP"], ...cases, fallback];
+}
+
+/**
+ * TOPMAR01 - 13.2.18 Topmarks (S-52 PresLib 4.0, section 13.2.18)
+ *
+ * Applies to S-57 object class TOPMAR (point only).
+ * Attribute: TOPSHP (topmark/daymark shape)
+ *
+ * The symbol depends on TOPSHP and whether the topmark sits on a floating
+ * platform (buoy, light float) or rigid platform (beacon, daymark).
+ *
+ * FIXME: Determining floating vs rigid requires a spatial co-location query
+ * (is there a BOY*, LITFLT, or LITVES at the same position?). MapLibre can't
+ * do this at render time. Currently defaults to rigid symbols. The s57 pipeline
+ * should pre-compute a _FLOATING attribute for TOPMAR features.
+ */
+export function TOPMAR01(_config: LayerConfig): Partial<LayerSpecification>[] {
+  // FIXME: When the pipeline adds _FLOATING, split into two layers:
+  //   filter: ["==", ["get", "_FLOATING"], true]  → topshpMatch(TOPSHP_FLOATING, "TMARDEF2")
+  //   filter: ["!=", ["get", "_FLOATING"], true]  → topshpMatch(TOPSHP_RIGID, "TMARDEF1")
+  return [
+    // No TOPSHP → question mark
+    {
+      type: "symbol",
+      filter: ["!", ["has", "TOPSHP"]],
+      layout: { "icon-image": "QUESMRK1", "icon-allow-overlap": true },
+    },
+    // Has TOPSHP → rigid platform symbol (default until _FLOATING is available)
+    {
+      type: "symbol",
+      filter: ["has", "TOPSHP"],
+      layout: {
+        "icon-image": topshpMatch(
+          TOPSHP_RIGID,
+          "TMARDEF1",
+        ) as ExpressionSpecification,
+        "icon-allow-overlap": true,
+      },
+    },
+  ];
+}
 
 /**
  * UDWHAZ05 - 13.2.20 Isolated dangers in general that endanger own ship
