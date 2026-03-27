@@ -1,4 +1,8 @@
-import { ExpressionSpecification, LayerSpecification } from "maplibre-gl";
+import {
+  ExpressionFilterSpecification,
+  ExpressionSpecification,
+  LayerSpecification,
+} from "maplibre-gl";
 import { Reference } from "./parser.js";
 import { colour } from "@enc-tiles/s52";
 import { LineStyles } from "./SHOWLINE.js";
@@ -232,5 +236,66 @@ export function SOUNDG03(config: LayerConfig): Partial<LayerSpecification>[] {
 }
 /** SYMINS02 - 13.2.17 Symbolizing encoded objects specified by IMO */
 /** TOPMAR01 - 13.2.18 Topmarks */
-/** UDWHAZ05 - 13.2.19 Isolated dangers in general that endanger own ship */
+
+/**
+ * UDWHAZ05 - 13.2.20 Isolated dangers in general that endanger own ship
+ * (S-52 PresLib 4.0, section 13.2.20)
+ *
+ * Not called directly from lookup tables -- used as a helper by WRECKS05 and OBSTRN07.
+ *
+ * FIXME: The full S-52 procedure spatially queries underlying DEPARE/DRGARE areas
+ * to determine if a hazard lies within safe water (DRVAL1 >= safety contour).
+ * This spatial check is not possible at MapLibre render time, so we conservatively
+ * show ISODGR01 for all features with VALSOU <= safetyContour. The s57 pipeline
+ * should pre-compute this and add it as a feature attribute.
+ *
+ * Skipped for WATLEV 1 (partly submerged) or 2 (always dry) per spec, as these
+ * are above-water dangers that don't get the isolated danger symbol.
+ */
+export function UDWHAZ05(
+  config: LayerConfig,
+): Partial<LayerSpecification> | undefined {
+  return {
+    type: "symbol",
+    filter: isolatedDanger(config),
+    layout: {
+      "icon-image": "ISODGR01",
+      "icon-allow-overlap": true,
+    },
+  };
+}
+
+/**
+ * Filter for features that are isolated dangers per UDWHAZ05:
+ *   - VALSOU exists and <= safetyContour
+ *   - WATLEV is NOT 1 (partly submerged) or 2 (always dry), i.e. feature is underwater
+ */
+export function isolatedDanger(
+  config: LayerConfig,
+): ExpressionFilterSpecification {
+  return [
+    "all",
+    ["has", "VALSOU"],
+    ["<=", ["get", "VALSOU"], config.safetyDepth],
+    // WATLEV 1 (partly submerged) and 2 (always dry) are above-water dangers
+    // that don't get the isolated danger symbol
+    [
+      "any",
+      ["!", ["has", "WATLEV"]],
+      ["!", ["in", ["get", "WATLEV"], ["literal", [1, 2]]]],
+    ],
+  ];
+}
+
+/**
+ * Filter expression for features that are NOT isolated dangers.
+ * Used by WRECKS05/OBSTRN07 to avoid double-symbolizing hazards
+ * that are already shown with the ISODGR01 symbol.
+ */
+export function notIsolatedDanger(
+  config: LayerConfig,
+): ExpressionFilterSpecification {
+  return ["!", isolatedDanger(config)];
+}
+
 /** WRECKS05 - 13.2.20 Wrecks */
